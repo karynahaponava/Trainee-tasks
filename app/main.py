@@ -3,63 +3,28 @@ from pyspark.sql import SparkSession
 import sys
 import os
 
-JDBC_DRIVER_FILENAME = "postgresql-42.7.8.jar"
+JDBC_DRIVER_PATH = "/app/postgresql-42.7.8.jar"
 
 HADOOP_HOME_PATH = "C:\\hadoop"
 
 def main():
-    # === ПРИНУДИТЕЛЬНАЯ НАСТРОЙКА HADOOP ДЛЯ WINDOWS ===
-    if os.name == 'nt':  # Проверка, что мы на Windows
-        print(f"[ИНФО] Настройка окружения Hadoop для Windows...")
-        
-        # 1. Устанавливаем HADOOP_HOME для текущего процесса Python
-        os.environ['HADOOP_HOME'] = HADOOP_HOME_PATH
-        
-        # 2. Проверяем наличие winutils.exe
-        hadoop_bin = os.path.join(HADOOP_HOME_PATH, 'bin')
-        winutils_path = os.path.join(hadoop_bin, 'winutils.exe')
-        
-        if not os.path.exists(winutils_path):
-             print(f"\n[КРИТИЧЕСКАЯ ОШИБКА] Файл winutils.exe не найден по пути: {winutils_path}")
-             sys.exit(1)
-             
-        # 3. Добавляем папку bin в системный PATH для текущего процесса
-        os.environ['PATH'] = hadoop_bin + os.pathsep + os.environ['PATH']
-        print(f"[ИНФО] HADOOP_HOME успешно установлен в: {os.environ['HADOOP_HOME']}")
-        print(f"[ИНФО] winutils.exe найден в: {winutils_path}\n")
-
-    # 1. Находим полный путь к JAR файлу драйвера PostgreSQL в текущей папке
-    current_dir = os.getcwd()
-    driver_path = os.path.join(current_dir, JDBC_DRIVER_FILENAME)
-
-    # Проверка: если драйвер не найден, выводим понятную ошибку и выходим
-    if not os.path.exists(driver_path):
-        print(f"\n[ОШИБКА] Файл драйвера JDBC не найден: {driver_path}")
-        sys.exit(1)
-
-    print(f"[ИНФО] Используем JDBC драйвер: {driver_path}")
-
-    # 2. Инициализация SparkSession
-    # Мы передаем путь к драйверу прямо в конфигурацию Spark
+    print("[ИНФО] Запуск Python скрипта внутри Docker...")
     spark = SparkSession.builder \
         .appName("Pagila SQL Analysis") \
-        .config("spark.jars", driver_path) \
-        .config("spark.driver.extraClassPath", driver_path) \
+        .config("spark.jars", JDBC_DRIVER_PATH) \
+        .config("spark.driver.extraClassPath", JDBC_DRIVER_PATH) \
         .getOrCreate()
 
-    # Устанавливаем уровень логгирования WARN, чтобы не засорять вывод лишней информацией
     spark.sparkContext.setLogLevel("WARN")
 
-    # --- Настройки подключения к базе данных Pagila в Docker ---
-    # Эти параметры должны совпадать с теми, что указаны в вашем docker-compose.yml
-    jdbc_url = "jdbc:postgresql://localhost:5432/postgres"
+    jdbc_url = "jdbc:postgresql://pagila:5432/postgres"
+
     db_properties = {
         "user": "postgres",
         "password": "123456",
         "driver": "org.postgresql.Driver"
     }
 
-    # Список таблиц, которые нам понадобятся для запросов
     tables_to_load = [
         "actor", "category", "film", "film_actor", "film_category",
         "inventory", "rental", "payment", "customer", "address", "city"
@@ -68,25 +33,22 @@ def main():
     try:
         print("\n[ИНФО] Подключение к базе данных и загрузка таблиц...")
         for table in tables_to_load:
-            # Читаем каждую таблицу из PostgreSQL и регистрируем ее как временное представление (View) в Spark.
-            # Это позволяет нам потом писать к ним обычные SQL-запросы.
             spark.read.jdbc(url=jdbc_url, table=f"public.{table}", properties=db_properties) \
                  .createOrReplaceTempView(table)
         print("[ИНФО] Все таблицы успешно загружены и готовы к запросам!\n")
 
     except Exception as e:
-        # Если подключение не удалось (например, Docker контейнер не запущен)
         print(f"\n[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться к базе данных.\nДетали ошибки: {e}")
-        print("\nСОВЕТ: Проверьте, запущен ли ваш Docker контейнер с базой данных Pagila.")
+        print(f"Детали: {e}")        
         spark.stop()
         sys.exit(1)
 
-    # Вспомогательная функция для выполнения SQL-запроса и красивого вывода результата
     def run_query(title, sql_query):
         print(f"--- {title} ---")
-        # spark.sql(sql_query) выполняет запрос.
-        # .show(truncate=False) выводит результат в консоль без обрезания длинных строк.
-        spark.sql(sql_query).show(truncate=False)
+        try:
+            spark.sql(sql_query).show(truncate=False)
+        except Exception as e:
+            print(f"Ошибка выполнения запроса: {e}")
         print("-" * 50 + "\n")
 
     # 1. Количество фильмов в каждой категории, отсортированное по убыванию.
