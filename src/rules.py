@@ -17,7 +17,7 @@ class FatalErrorTimeRule(BaseAlertRule):
     """
     def check(self, df: pd.DataFrame) -> List[str]:
         alerts = []
-        fatal_df = df[df['severity'] == 'Fatal'].copy()
+        fatal_df = df[df['severity'].isin(['Fatal', 'Error'])].copy()
         if fatal_df.empty:
             return alerts
 
