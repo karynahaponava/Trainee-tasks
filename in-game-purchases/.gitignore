@@ -1,0 +1,17 @@
+logs/
+*.log
+
+__pycache__/
+*.pyc
+
+.vscode/
+.idea/
+
+data/
+
+.env
+*.pem
+
+localstack_data/
+*.pem.crt
+*.pem.key

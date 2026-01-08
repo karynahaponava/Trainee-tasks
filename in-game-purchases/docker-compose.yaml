@@ -1,0 +1,152 @@
+x-airflow-common:
+  &airflow-common
+  build: .
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres/${AIRFLOW_DB_NAME}    
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres/${AIRFLOW_DB_NAME}
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+    AIRFLOW_CONN_GCOMM_POSTGRES: 'postgres://admin:admin123@gcomm-postgres:5432/gcomm_db'
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: us-east-1
+    AWS_ENDPOINT_URL: http://localstack:4566
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./etl:/opt/airflow/etl
+    - ./tests:/opt/airflow/tests
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  networks:
+    - airflow-net
+
+services:
+  localstack:
+    image: localstack/localstack
+    ports: ["4566:4566"]
+    environment:
+      - SERVICES=s3
+    networks:
+      - airflow-net
+
+  gcomm-postgres:
+    image: postgres:13
+    container_name: gcomm_dw
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["5433:5432"]
+    volumes:
+      - ./sql/init_warehouse.sql:/docker-entrypoint-initdb.d/init_warehouse.sql
+    networks:
+      - airflow-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "admin", "-d", "gcomm_db"]
+      interval: 5s
+
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: spark-master
+    ports: ["9090:8080", "7077:7077"]
+    networks:
+      - airflow-net
+
+  spark-worker:
+    image: apache/spark:3.5.0
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on: [spark-master]
+    networks:
+      - airflow-net
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    networks:
+      - airflow-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+
+  redis:
+    image: redis:latest
+    networks:
+      - airflow-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports: ["8080:8080"]
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+
+  sales-api:
+    build: ./api  
+    container_name: sales_api
+    ports:
+      - "8000:8000" 
+    environment:
+       - DB_USER=${POSTGRES_USER}
+       - DB_PASSWORD=${POSTGRES_PASSWORD}
+       - DB_NAME=${POSTGRES_DB}
+       - DB_HOST=${POSTGRES_HOST}
+    depends_on:
+      - gcomm-postgres 
+    networks:
+      - airflow-net
+    restart: always
+
+volumes:
+  postgres-db-volume:
+
+networks:
+  airflow-net:
+    driver: bridge
