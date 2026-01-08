@@ -1,0 +1,16 @@
+.env
+
+pg_dwh_data/
+pg_data/
+postgres_data/
+
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
