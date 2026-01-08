@@ -1,0 +1,5 @@
+DATA_PATH = '/opt/airflow/data'
+SOURCE_FILE = f'{DATA_PATH}/tiktok_google_play_reviews.csv'
+PROCESSED_FILE = f'{DATA_PATH}/processed_data.csv'
+TEMP_STEP1 = f'{DATA_PATH}/temp_step1.csv'
+TEMP_STEP2 = f'{DATA_PATH}/temp_step2.csv'

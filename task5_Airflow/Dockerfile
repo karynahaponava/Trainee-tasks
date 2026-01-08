@@ -1,0 +1,1 @@
+FROM apache/airflow:2.0.2-python3.8
