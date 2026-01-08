@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  log-analyzer:
+    build: .
+    container_name: alert_system
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
