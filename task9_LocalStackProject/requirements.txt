@@ -1,0 +1,5 @@
+pandas
+boto3
+s3fs
+pyspark
+apache-airflow-providers-amazon

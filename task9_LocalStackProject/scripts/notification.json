@@ -1,0 +1,16 @@
+{
+  "TopicConfigurations": [
+    {
+      "TopicArn": "arn:aws:sns:us-east-1:000000000000:MetricsTopic",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            { "Name": "prefix", "Value": "metrics/" },
+            { "Name": "suffix", "Value": ".csv" }
+          ]
+        }
+      }
+    }
+  ]
+}
