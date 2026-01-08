@@ -1,0 +1,75 @@
+version: "3.8"
+networks:
+  ping:
+    driver: bridge
+volumes:
+  pgdata:
+services:
+  pagila:
+    image: postgres:17
+    container_name: pagila
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD} 
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: postgres
+    volumes:
+      - ./database/pagila-master/pagila-schema.sql:/docker-entrypoint-initdb.d/1-pagila-schema.sql
+      - ./database/pagila-master/pagila-schema-jsonb.sql:/docker-entrypoint-initdb.d/1-pagila-schema-jsonb.sql
+      - ./database/pagila-master/pagila-data.sql:/docker-entrypoint-initdb.d/2-pagila-data.sql
+      - ./database/pagila-master/restore-pagila-data-jsonb.sh:/docker-entrypoint-initdb.d/3-restore-pagila-data-jsonb.sh
+      - ./database/pagila-master/pagila-data-yum-jsonb.backup:/docker-entrypoint-initdb.d/pagila-data-yum-jsonb.backup
+      - ./database/pagila-master/pagila-data-apt-jsonb.backup:/docker-entrypoint-initdb.d/pagila-data-apt-jsonb.backup
+      - pgdata:/var/lib/postgresql/data
+    expose:
+      - 5432
+    ports:
+      - 5432:5432
+    networks:
+      - ping
+  pgadmin:
+    container_name: pgadmin4
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: root
+    volumes:
+      - "./pgadmin/pgadmin_servers.json:/pgadmin4/servers.json"
+      - "./pgadmin/pgadmin_pass:/pgadmin4/pass"
+    ports:
+      - "5050:80"
+    networks:
+      - ping
+  spark-master:
+    build: ./spark-image  
+    container_name: spark-master
+    command: /spark-master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    networks:
+      - ping
+
+  # === SPARK WORKER ===
+  spark-worker:
+    build: ./spark-image
+    container_name: spark-worker
+    command: /spark-worker
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+    depends_on:
+      - spark-master
+    networks:
+      - ping
+
+  # === SPARK CLIENT ===
+  spark-client:
+    build: ./spark-image
+    container_name: spark-client
+    command: tail -f /dev/null
+    volumes:
+      - ./app:/app  
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+    networks:
+      - ping
+   
