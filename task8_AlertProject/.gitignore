@@ -1,16 +1,20 @@
-venv/
-env/
-
 __pycache__/
 *.py[cod]
+*$py.class
 
-.vscode/
-.idea/
-.DS_Store
+venv/
+env/
+.venv/
 
-data/
+.env
+
+data/*.csv
+data/*.processed
 processed/
-
-*.csv
-*.processed
 *.log
+
+.idea/
+.vscode/
+*.swp
+
+.pytest_cache/
