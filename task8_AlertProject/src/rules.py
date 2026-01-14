@@ -1,54 +1,73 @@
 from abc import ABC, abstractmethod
-import pandas as pd
 from typing import List
+import pandas as pd
+
 
 class BaseAlertRule(ABC):
-    """
-    Базовый абстрактный класс. 
-    Все новые правила должны наследоваться от него.
-    """
+    """Abstract base class for all alert rules."""
+
     @abstractmethod
     def check(self, df: pd.DataFrame) -> List[str]:
         pass
 
+
 class FatalErrorTimeRule(BaseAlertRule):
-    """
-    Правило 2.1: Более 10 фатальных ошибок за 1 минуту.
-    """
+    """Rule 2.1: Detects more than 10 fatal errors within a rolling 1-minute window."""
+
     def check(self, df: pd.DataFrame) -> List[str]:
         alerts = []
-        fatal_df = df[df['severity'].isin(['Fatal', 'Error'])].copy()
+
+        fatal_df = df[df["severity"] == "Fatal"].copy()
+
         if fatal_df.empty:
             return alerts
 
         if not isinstance(fatal_df.index, pd.DatetimeIndex):
-            fatal_df.set_index('date', inplace=True)
+            fatal_df = fatal_df.set_index("date")
 
-        counts = fatal_df.resample('1min').size()
-        spikes = counts[counts > 10]
+        fatal_df.sort_index(inplace=True)
 
-        for time, count in spikes.items():
-            alerts.append(f"[RULE 2.1] Критично: {count} ошибок в {time}")
-        
+        rolling_counts = fatal_df.rolling("1min").count()["severity"]
+
+        spikes = rolling_counts[rolling_counts > 10]
+
+        if not spikes.empty:
+            resampled_view = spikes.resample("1min").max().dropna()
+
+            for time, count in resampled_view.items():
+                alerts.append(
+                    f"[RULE 2.1] Critical: {int(count)} fatal errors around {time}"
+                )
+
         return alerts
 
+
 class BundleFatalErrorRule(BaseAlertRule):
-    """
-    Правило 2.2: Более 10 фатальных ошибок за 1 час для bundle_id.
-    """
+    """Rule 2.2: Detects more than 10 fatal errors for a specific bundle_id within a rolling 1-hour window."""
+
     def check(self, df: pd.DataFrame) -> List[str]:
         alerts = []
-        fatal_df = df[df['severity'] == 'Fatal'].copy()
+
+        fatal_df = df[df["severity"] == "Fatal"].copy()
+
         if fatal_df.empty:
             return alerts
 
         if not isinstance(fatal_df.index, pd.DatetimeIndex):
-            fatal_df.set_index('date', inplace=True)
+            fatal_df = fatal_df.set_index("date")
 
-        grouped = fatal_df.groupby('bundle_id')['severity'].resample('1h').count()
+        fatal_df.sort_index(inplace=True)
+
+        grouped = fatal_df.groupby("bundle_id")["severity"].rolling("1h").count()
+
         spikes = grouped[grouped > 10]
 
-        for (bundle_id, time), count in spikes.items():
-            alerts.append(f"[RULE 2.2] Bundle Alert: {bundle_id} -> {count} ошибок в {time}")
+        if not spikes.empty:
+            problematic_bundles = spikes.index.get_level_values("bundle_id").unique()
+
+            for bundle in problematic_bundles:
+                alerts.append(
+                    f"[RULE 2.2] Bundle Alert: High fatal rate detected for {bundle}"
+                )
 
         return alerts
