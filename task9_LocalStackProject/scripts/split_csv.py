@@ -1,46 +1,35 @@
-import pandas as pd
+import sys
 import os
-from pathlib import Path
+import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-INPUT_FILE = BASE_DIR / 'data' / 'raw' / 'database.csv'
-OUTPUT_DIR = BASE_DIR / 'data' / 'monthly_data'
 
-def split_csv_by_month():
-    if not OUTPUT_DIR.exists():
-        os.makedirs(OUTPUT_DIR)
+def split_csv_by_date(input_file, output_dir):
+    if not os.path.exists(input_file):
+        print(f"File not found: {input_file}")
+        sys.exit(1)
 
-    print(f"--- Начинаю разбивку файла: {INPUT_FILE} ---")
-    
-    chunk_size = 500000
-    
+    os.makedirs(output_dir, exist_ok=True)
+
     try:
-        csv_reader = pd.read_csv(INPUT_FILE, chunksize=chunk_size, parse_dates=['departure'])
-    except FileNotFoundError:
-        print("ОШИБКА: Файл database.csv не найден!")
-        print(f"Проверьте, что он лежит тут: {INPUT_FILE}")
-        return
+        df = pd.read_csv(input_file)
 
-    batch_num = 0
-    
-    for chunk in csv_reader:
-        batch_num += 1
-        print(f"Обрабатываю часть №{batch_num}...")
+        df["dt"] = pd.to_datetime(df["Departure time"])
 
-        chunk['month_key'] = pd.to_datetime(chunk['departure'], errors='coerce').dt.to_period('M')
+        for period, group in df.groupby(df["dt"].dt.to_period("M")):
+            month_str = str(period)
+            filename = f"bikes_{month_str}.csv"
+            save_path = os.path.join(output_dir, filename)
 
-        for group_name, df_group in chunk.groupby('month_key'):
-            if pd.isna(group_name):
-                continue
-                
-            filename = f"bikes_{group_name}.csv"
-            save_path = OUTPUT_DIR / filename
-            
-            write_header = not save_path.exists()
-            
-            df_group.drop(columns=['month_key']).to_csv(save_path, mode='a', index=False, header=write_header)
+            group.drop(columns=["dt"]).to_csv(save_path, index=False)
+            print(f"Saved {save_path}")
 
-    print(f"--- Готово! Файлы лежат в {OUTPUT_DIR} ---")
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    split_csv_by_month()
+    if len(sys.argv) < 3:
+        print("Usage: python split_csv.py <input_file> <output_dir>")
+        sys.exit(1)
+    split_csv_by_date(sys.argv[1], sys.argv[2])

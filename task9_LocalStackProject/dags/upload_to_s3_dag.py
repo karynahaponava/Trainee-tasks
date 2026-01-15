@@ -1,79 +1,49 @@
-from datetime import datetime, timedelta
 import os
-import glob
 import boto3
+import logging
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from botocore.exceptions import ClientError
+from airflow.utils.dates import days_ago
 
-AWS_ENDPOINT_URL = os.getenv("AWS_ENDPOINT_URL")
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-BUCKET_NAME = "helsinki-bikes-data"
-LOCAL_DATA_PATH = "/opt/airflow/data/monthly_data"
+logger = logging.getLogger("airflow.task")
 
-class S3Uploader:
+FILENAME = os.environ.get("SOURCE_FILENAME", "data/database.csv")
+BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "helsinki-bikes-data")
+
+
+def upload_source_data():
     """
-    Класс для работы с S3 (LocalStack).
+    Загружает исходный файл в S3 бакет.
     """
-    def __init__(self):
-        self.s3_client = boto3.client(
-            "s3",
-            endpoint_url=AWS_ENDPOINT_URL,
-            aws_access_key_id=AWS_ACCESS_KEY,
-            aws_secret_access_key=AWS_SECRET_KEY,
-            region_name="us-east-1"
-        )
+    file_path = f"/opt/airflow/{FILENAME}"
 
-    def create_bucket_if_not_exists(self, bucket_name: str):
-        try:
-            self.s3_client.head_bucket(Bucket=bucket_name)
-            print(f"Бакет {bucket_name} уже существует.")
-        except ClientError:
-            print(f"Бакет {bucket_name} не найден. Создаем...")
-            self.s3_client.create_bucket(Bucket=bucket_name)
+    if not os.path.exists(file_path):
+        if not os.path.exists(FILENAME):
+            raise FileNotFoundError(f"File {file_path} not found")
+        file_path = FILENAME
 
-    def upload_file(self, file_path: str, bucket_name: str):
-        file_name = os.path.basename(file_path)
-        object_name = f"raw/{file_name}"
-        
-        try:
-            self.s3_client.upload_file(file_path, bucket_name, object_name)
-            print(f"Загружен: {file_name}")
-        except ClientError as e:
-            print(f"Ошибка загрузки {file_name}: {e}")
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("AWS_ENDPOINT_URL", "http://localstack:4566"),
+    )
 
-def task_flow():
-    uploader = S3Uploader()
-    uploader.create_bucket_if_not_exists(BUCKET_NAME)
-    
-    # Ищем CSV файлы
-    files = glob.glob(f"{LOCAL_DATA_PATH}/*.csv")
-    print(f"Найдено файлов: {len(files)}")
-    
-    if not files:
-        print(f"ВАЖНО: Файлы не найдены в {LOCAL_DATA_PATH}. Проверьте папку data/monthly_data.")
-    
-    # Загружаем файлы
-    for file_path in files:
-        uploader.upload_file(file_path, BUCKET_NAME)
+    logger.info(f"Starting upload of {file_path} to s3://{BUCKET_NAME}...")
+    try:
+        s3.upload_file(file_path, BUCKET_NAME, "data/database.csv")
+        logger.info("Upload complete successfully.")
+    except Exception as e:
+        logger.error(f"Failed to upload file: {e}")
+        raise e
 
-default_args = {
-    'owner': 'admin',
-    'retries': 1,
-    'retry_delay': timedelta(minutes=1),
-}
 
 with DAG(
-    dag_id='01_upload_raw_data_to_s3',
-    default_args=default_args,
-    start_date=datetime(2023, 1, 1),
-    schedule_interval='@once',
+    "01_upload_to_s3",
+    start_date=days_ago(1),
+    schedule_interval="@monthly",
     catchup=False,
-    tags=['localstack', 'etl']
+    tags=["s3", "upload"],
 ) as dag:
 
-    upload_op = PythonOperator(
-        task_id='upload_csvs',
-        python_callable=task_flow
+    upload_task = PythonOperator(
+        task_id="upload_data", python_callable=upload_source_data
     )
