@@ -1,76 +1,97 @@
 import json
 import boto3
+import csv
 import os
-import io
-import pandas as pd
-from datetime import datetime
+import urllib.parse
+import logging
 
-AWS_ENDPOINT = os.environ.get('AWS_ENDPOINT_URL', 'http://localstack:4566')
-s3_client = boto3.client('s3', endpoint_url=AWS_ENDPOINT)
-dynamodb = boto3.resource('dynamodb', endpoint_url=AWS_ENDPOINT)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", "http://localstack:4566")
+REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
+s3_client = boto3.client("s3", endpoint_url=ENDPOINT_URL, region_name=REGION)
+dynamodb = boto3.resource("dynamodb", endpoint_url=ENDPOINT_URL, region_name=REGION)
+
+
+def get_target_table(key):
+    """
+    Определяет, в какую таблицу писать данные, исходя из имени файла.
+    """
+    if "metrics/daily" in key:
+        return "DailyMetrics"
+    elif "metrics/departures" in key:
+        return "DeparturesData"
+    elif "metrics/returns" in key:
+        return "ReturnsData"
+    return None
+
 
 def lambda_handler(event, context):
-    print("Lambda started via SQS/SNS...")
-    
-    try:
-        for record in event['Records']:
-            sns_body = json.loads(record['body'])
-            s3_msg = json.loads(sns_body['Message'])
-            
-            if 'Records' not in s3_msg:
-                print("Skipping non-S3 message")
-                continue
-                
-            s3_record = s3_msg['Records'][0]
-            bucket_name = s3_record['s3']['bucket']['name']
-            file_key = s3_record['s3']['object']['key']
-            
-            print(f"Processing file: {file_key}")
+    logger.info(f"Received event: {json.dumps(event)}")
 
-            if "departures_agg" in file_key:
-                table_name = "DeparturesData"
-                mapping = lambda row: {
-                    'StationName': str(row['departure_name']),
-                    'Count': int(row['count'])
-                }
-            elif "returns_agg" in file_key:
-                table_name = "ReturnsData"
-                mapping = lambda row: {
-                    'StationName': str(row['return_name']),
-                    'Count': int(row['count'])
-                }
-            elif "daily_metrics" in file_key:
-                table_name = "DailyMetrics"
-                mapping = lambda row: {
-                    'Date': str(row['Date']),
-                    'AvgDistance': str(round(float(row['AvgDistance']), 2)),
-                    'AvgDuration': str(round(float(row['AvgDuration']), 2)),
-                    'AvgSpeed': str(round(float(row['AvgSpeedKmH']), 2)),
-                    'AvgTemp': str(round(float(row['AvgTemp']), 1))
-                }
-            else:
-                print("Not a target file, skipping.")
+    for record in event["Records"]:
+        try:
+            body = record["body"]
+            try:
+                sns_message = json.loads(body)
+                if "Message" in sns_message:
+                    s3_event = json.loads(sns_message["Message"])
+                else:
+                    s3_event = sns_message
+            except:
+                s3_event = json.loads(body)
+
+            if "Records" not in s3_event:
                 continue
 
-            obj = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-            df = pd.read_csv(io.BytesIO(obj['Body'].read()))
-            
-            print(f"Dataframe shape: {df.shape}")
-            
-            table = dynamodb.Table(table_name)
-            
-            with table.batch_writer() as batch:
-                for index, row in df.iterrows():
-                    try:
-                        item = mapping(row)
-                        batch.put_item(Item=item)
-                    except Exception as row_err:
-                        print(f"Error processing row {index}: {row_err}")
-            
-            print(f"Saved to DynamoDB table: {table_name}")
+            for s3_record in s3_event["Records"]:
+                bucket_name = s3_record["s3"]["bucket"]["name"]
+                key = urllib.parse.unquote_plus(
+                    s3_record["s3"]["object"]["key"], encoding="utf-8"
+                )
 
-        return {'statusCode': 200, 'body': 'Success'}
+                if "_temporary" in key or "_SUCCESS" in key:
+                    continue
 
-    except Exception as e:
-        print(f"ERROR: {str(e)}")
-        return {'statusCode': 200, 'body': str(e)}
+                table_name = get_target_table(key)
+                if not table_name:
+                    logger.warning(f"Skipping unknown file path: {key}")
+                    continue
+
+                logger.info(f"Processing file: {key} -> Target Table: {table_name}")
+                table = dynamodb.Table(table_name)
+
+                download_path = f"/tmp/{os.path.basename(key)}"
+                s3_client.download_file(bucket_name, key, download_path)
+
+                with open(download_path, mode="r", encoding="utf-8") as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    with table.batch_writer() as batch:
+                        count = 0
+                        for row in reader:
+                            item = {k: v for k, v in row.items() if v}
+
+                            if table_name == "DeparturesData":
+                                item["StationName"] = row.get("station_dep", "Unknown")
+                                if "station_dep" in item:
+                                    del item["station_dep"]
+
+                            if table_name == "ReturnsData":
+                                item["StationName"] = row.get("station_ret", "Unknown")
+                                if "station_ret" in item:
+                                    del item["station_ret"]
+
+                            batch.put_item(Item=item)
+                            count += 1
+
+                logger.info(
+                    f"Successfully loaded {count} rows from {key} into {table_name}"
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing record: {e}")
+            raise e
+
+    return {"statusCode": 200, "body": json.dumps("Processing complete")}
